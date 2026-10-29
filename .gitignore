@@ -1,0 +1,14 @@
+# Whitelist: only this project's own docs, tools and sandbox scripts are tracked.
+# The game itself (installer, paks, extracted files), dumps, logs and the player's save never go into git.
+*
+!.gitignore
+!README.md
+# notes/ (research notes, blog, change log) stays local
+!tools/
+!tools/*.py
+!vm/
+!vm/*.ps1
+!vm/*.cmd
+!vm/*.sh
+!vm/*.wsb
+!vm/DebugConfig.cfg
