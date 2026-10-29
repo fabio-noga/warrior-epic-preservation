@@ -70,8 +70,9 @@ public static class Bp {
 }
 '@
 $p = $null
+. (Join-Path $PSScriptRoot 'gamepid.ps1')
 for ($t = 0; $t -lt 240 -and -not $p; $t++) {   # wait up to 2 min for the game
-    $p = Get-Process WEShell_TGI -ErrorAction SilentlyContinue | Select-Object -First 1
+    $p = GameProcess
     if (-not $p) { Start-Sleep -Milliseconds 500 }
 }
 if (-not $p) { 'game not running'; exit 1 }

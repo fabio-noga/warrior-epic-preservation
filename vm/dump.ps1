@@ -8,7 +8,8 @@ public static class Dbg {
     public static extern bool MiniDumpWriteDump(IntPtr hProcess, uint pid, IntPtr hFile, uint type, IntPtr e, IntPtr u, IntPtr c);
 }
 '@
-$p = Get-Process WEShell_TGI -ErrorAction SilentlyContinue | Select-Object -First 1
+. (Join-Path $PSScriptRoot 'gamepid.ps1')
+$p = GameProcess
 if (-not $p) { 'game not running'; exit 1 }
 $out = Join-Path $PSScriptRoot 'out\weshell.dmp'
 $fs = [IO.File]::Create($out)

@@ -12,3 +12,6 @@
 !vm/*.sh
 !vm/*.wsb
 !vm/DebugConfig.cfg
+!host/
+!host/*.c
+!host/*.cmd

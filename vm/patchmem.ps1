@@ -18,11 +18,12 @@ $patches = @(
     @('WEHallUI.dll', 0x676b7612, '74 5f', 'eb 5f', 'M2: lobby Join always does the CP JoinRoom (skip the direct town shortcut)')
 )
 $log = Join-Path $PSScriptRoot 'out\patchmem.txt'
+. (Join-Path $PSScriptRoot 'gamepid.ps1')
 function Hex($s) { [byte[]]($s -split ' ' | % { [Convert]::ToByte($_, 16) }) }
 $end = (Get-Date).AddSeconds($WaitSeconds)
 $done = @{}
 while ((Get-Date) -lt $end -and $done.Count -lt $patches.Count) {
-    $p = Get-Process WEShell_TGI -ErrorAction SilentlyContinue | Select-Object -First 1
+    $p = GameProcess
     if ($p) {
         $mods = try { $p.Modules | % { $_.ModuleName.ToLower() } } catch { @() }
         $h = [Mem]::OpenProcess(0x1F0FFF, $false, $p.Id)

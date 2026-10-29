@@ -12,7 +12,8 @@ public static class U {
 }
 '@
 [void][U]::SetProcessDPIAware()
-$p = Get-Process WEShell_TGI -ErrorAction SilentlyContinue | Select-Object -First 1
+. (Join-Path $PSScriptRoot 'gamepid.ps1')
+$p = GameProcess
 if (-not $p -or $p.MainWindowHandle -eq 0) { 'game window not found'; exit 1 }
 $r = New-Object U+R
 [void][U]::GetWindowRect($p.MainWindowHandle, [ref]$r)

@@ -6,6 +6,8 @@ sed -i 's/\r*$/\r/' ../auto.cmd
 rm -f done.txt screen_*.png click.txt bp.txt
 [ $# -gt 0 ] && echo "$*" > bp_addrs.txt
 cmd //c start "" "$(cygpath -w ../WarriorEpic_auto.wsb)"
+# put the sandbox window where the user saved it (vm/sandbox_pos.json), only with two monitors connected
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w ../sandbox_pos.ps1)" restore >/dev/null 2>&1 &
 for i in $(seq 1 110); do [ -f done.txt ] && break; sleep 5; done
 [ -f done.txt ] || echo "TIMEOUT: no done.txt"
 cat click.txt bp.txt 2>/dev/null

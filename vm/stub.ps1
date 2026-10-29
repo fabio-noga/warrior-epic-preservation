@@ -88,11 +88,11 @@ function PsipReply($peer, [byte[]]$p) {
 # Server types (bit flags): MLS 1, IS 2, AS 4, MSS 8, SS 0x10, MCS 0x20, CS 0x40, BS 0x80, GS 0x2000, MS 0x4000, MMS 0x8000,
 # WES 0x10000, TS 0x40000, GLS 0x1000000, DSPS 0x2000000.
 $ssdUrl = 'http://127.0.0.1:8080/ssd/'   # patcher feed; served (logged) by the HTTP logger below
-$servers = 4, 8, 0x10, 0x20, 0x40, 0x80, 0x4000, 0x8000, 0x10000, 0x2000000
+$servers = 4, 8, 0x10, 0x20, 0x40, 0x80, 0x4000, 0x8000, 0x10000, 0x2000000, 0x2000   # last: GS (game server, id 20), named in MP_StartGameNotice
 # A server's PSUID dword at +1 is (typeIndex << 16) | id; the client finds servers by (id, type) with exactly that
 # compare (exe 0x436f30, typeIndex = 0x436300). With a zero high word every by-id lookup failed, e.g.
 # "SendDataToServer, Invalid server id: 13" on START. ids stay 10 + position in $servers.
-$typeIndex = @{ 4 = 3; 8 = 4; 0x10 = 5; 0x20 = 6; 0x40 = 7; 0x80 = 8; 0x4000 = 0xe; 0x8000 = 0xf; 0x10000 = 0x10; 0x2000000 = 0x19 }
+$typeIndex = @{ 4 = 3; 8 = 4; 0x10 = 5; 0x20 = 6; 0x40 = 7; 0x80 = 8; 0x4000 = 0xe; 0x8000 = 0xf; 0x10000 = 0x10; 0x2000000 = 0x19; 0x2000 = 0xd }
 function ServerId([int]$i) { [uint32](($typeIndex[[int]$servers[$i]] -shl 16) -bor (10 + $i)) }
 
 function IsMsg([byte]$id, [int]$size) {
@@ -235,6 +235,16 @@ function ServerReply($type, [byte[]]$d) {
         $r[0x60] = 100; $r[0x68] = 127; $r[0x6b] = 1; [BitConverter]::GetBytes([uint32]8892).CopyTo($r, 0x6c)   # guess: +0x60 max users, +0x68 town ip, +0x6c port
         [void]$out.Add(@{ Type = 0x40; Proto = 6; Data = $r })
         Log ("CS JoinRoom {0} (callback 0x{1:x8}) -> success" -f $room, [BitConverter]::ToUInt32($d, 4))
+    } elseif ($type -in 0x20, 0x40 -and $d[0] -eq 0x0c) {
+        # CP 0x0c RoomSendData = room chat (+8 u32 ToUser (0 = all), +0xc FromUser, +0x10 type, +0x14 RoomID, +0x18 u16 bytes,
+        # +0x1a UTF-16 text). Answer CP 0x0d (0x18 bytes; +8 result guessed 0x19e24 = CP_E_SendRoomData_Succ) and relay
+        # the message back so it shows in the chat box (exe OnRecvData).
+        $r = New-Object byte[] 0x18
+        [Array]::Copy($d, 0, $r, 0, 0x18); $r[0] = 0x0d
+        [BitConverter]::GetBytes([uint32]0x19e24).CopyTo($r, 8)
+        [void]$out.Add(@{ Type = 0x20; Proto = 6; Data = $r })
+        [void]$out.Add(@{ Type = 0x20; Proto = 6; Data = $d })
+        Log ("CS chat room {0}: {1}" -f [BitConverter]::ToUInt32($d, 0x14), [Text.Encoding]::Unicode.GetString($d, 0x1a, [Math]::Max(0, [BitConverter]::ToUInt16($d, 0x18) - 2)))
     } elseif ($type -in 0x20, 0x40 -and $d[0] -eq 0x14) {
         # CP 0x14 SendRoomCmd ("Set Room Info"; +4 u32 flags (0x40 buffer, 0x80, 0x400 gaming = START), +8 u32 FromUser,
         # +0xc u8 cmd, +0xd u32 RoomID, +0x11 u32 len, +0x15 data). Answer CP 0x15 SendRoomCmd_Res (0x11 bytes, exe 0x47ab60):
@@ -247,6 +257,21 @@ function ServerReply($type, [byte[]]$d) {
         [void]$out.Add(@{ Type = 0x20; Proto = 6; Data = $r })
         [void]$out.Add(@{ Type = 0x20; Proto = 6; Data = $d })
         Log ("CS RoomCmd {0} flags 0x{1:x} room {2} -> ok + relay" -f $d[0xc], [BitConverter]::ToUInt32($d, 4), [BitConverter]::ToUInt32($d, 0xd))
+        if ($d[0xc] -eq 3) {
+            # Cmd_StartGame: the match server (MMS) tells the client where the game runs. MP = protocol 9 (name table exe
+            # 0x426b10). MP_StartGameNotice_Req (id 0x0f, 0x3b bytes, exe handler 0x476d20): +0xc RoomID, +0x10 u64 GameID,
+            # +0x18 u32 Token, +0x2f address {u32 ip, u16 transport (2 = UDP, guess), u16 port}, +0x37 u16 SessionId (guess 20).
+            $n = New-Object byte[] 0x3b
+            $n[0] = 0x0f; $n[1] = 1
+            [BitConverter]::GetBytes([uint32]0x1a2f2).CopyTo($n, 8)   # +8 result: 107250 = success (GameMain 0x66a7cfaa)
+            [Array]::Copy($d, 0xd, $n, 0xc, 4)
+            $n[0x10] = 1; [BitConverter]::GetBytes([uint32]0).CopyTo($n, 0x18)   # token 0: the in-process ServerWorld is started with gameId 0 (tokens 0)
+            $n[0x1c] = 1; [BitConverter]::GetBytes((ServerId ([array]::IndexOf($servers, 0x2000)))).CopyTo($n, 0x1d)   # +0x1c PSUID of the game server
+            [BitConverter]::GetBytes([uint32]0x7f000001).CopyTo($n, 0x2f); $n[0x33] = 2
+            [BitConverter]::GetBytes([uint16]9999).CopyTo($n, 0x35); $n[0x37] = 20
+            [void]$out.Add(@{ Type = 0x8000; Proto = 0xa; Data = $n })   # match messages = protocol 10 (module vtable 0x569740 slot 4); 9 = in-game data frames (type 3 plain, 4 fragmented)
+            Log "MP StartGameNotice -> game server 127.0.0.1:9999 session 20, token 0"
+        }
     } elseif ($type -in 0x20, 0x40 -and $d[0] -eq 0x08) {
         # CP 0x08 CreateRoom (game room; +4 u32 callback id, +8 AreaID, +0x10 type, ...) -> CP_CreateRoom_Res (0x09, 0x14 bytes,
         # handler exe 0x47fc20): +4 callback (echo), +8 result (0x19e10 = success), +0xc new RoomID, +0x10 ChatServer.
@@ -259,6 +284,21 @@ function ServerReply($type, [byte[]]$d) {
         $r[0x10] = 13      # ChatServer = server index 13 (MCS, where the client sends CP); 14 gives "SendDataToServer, Invalid server id"
         [void]$out.Add(@{ Type = 0x40; Proto = 6; Data = $r })
         Log ("CS CreateRoom (callback 0x{0:x8}, area {1}, type {2}) -> room {3}" -f [BitConverter]::ToUInt32($d, 4), [BitConverter]::ToUInt32($d, 8), [BitConverter]::ToUInt32($d, 0x10), $script:nextRoom)
+        # CP 0x20 SyncUserList (exe OnUserListRecv 0x47fff0; length must be 0x15 + array): +8 u8 1 = add, +9 RoomID,
+        # +0xd LSArray {u32 count, u32 offset 8}, user = 0x22-byte header (+0 AccID, +4..+0x14 u32, +0x18 u8 name bytes,
+        # +0x19 u8 nick bytes, +0x1a u32 buffer len, +0x1e u32 buffer2 len) + UTF-16 name, nick, buffer, buffer2.
+        # Without it GameMain's LogicGameRoom has no player, so order 0x157 never serializes the player data.
+        $name = [Text.Encoding]::Unicode.GetBytes('Player')
+        $u = New-Object byte[] (0x22 + 2 * $name.Length)
+        $u[0] = 12; $u[0x18] = $name.Length; $u[0x19] = $name.Length
+        $name.CopyTo($u, 0x22); $name.CopyTo($u, 0x22 + $name.Length)
+        $l = New-Object byte[] (0x15 + $u.Length)
+        [Array]::Copy($d, 0, $l, 0, 8); $l[0] = 0x20; $l[8] = 1
+        [BitConverter]::GetBytes([uint32]$script:nextRoom).CopyTo($l, 9)
+        $l[0xd] = 1; $l[0x11] = 8
+        $u.CopyTo($l, 0x15)
+        [void]$out.Add(@{ Type = 0x40; Proto = 6; Data = $l })
+        Log "CS SyncUserList room $($script:nextRoom) -> add user 12"
     } else {
         Log ("server type 0x{0:x} not handled yet, data: {1}" -f $type, (($d | Select-Object -First 64 | % { $_.ToString('x2') }) -join ' '))
     }
@@ -386,6 +426,36 @@ if (Test-Path $saveFile) {
     $save = [ordered]@{}
     foreach ($pr in (Get-Content $saveFile -Raw -Encoding UTF8 | ConvertFrom-Json).PSObject.Properties) { $save[$pr.Name] = [string]$pr.Value }
 }
+# Starting gear and skills per warrior type (vm\startgear.json, made on the host by tools\startgear.py from the game's
+# own .base files): the original data server filled them on ADD_WARRIOR. Without them a warrior has no weapon (no basic
+# attack) and an empty skill bar.
+$startGear = @{}
+$gearFile = Join-Path $PSScriptRoot 'startgear.json'
+if (Test-Path $gearFile) { foreach ($pr in (Get-Content $gearFile -Raw | ConvertFrom-Json).PSObject.Properties) { $startGear[$pr.Name] = $pr.Value } }
+function GearKeys([string]$prefix, [string]$warriorid) {
+    # ordered key/values for one warrior: declare, APD n, elements (skill entries: skillid, skillbarindex, level array)
+    $g = $startGear[($warriorid -replace '^DWD:')]
+    $kv = [ordered]@{}
+    $eq = @(if ($g) { $g.equipment }); $sk = @(if ($g) { $g.skill })
+    $kv["${prefix}equipment"] = '#DWD:'
+    if ($eq.Count) { $kv["${prefix}equipment~apd"] = "$($eq.Count)"; for ($j = 0; $j -lt $eq.Count; $j++) { $kv["${prefix}equipment[$j]"] = "DWD:$($eq[$j])" } }
+    $kv["${prefix}skill"] = '#STT:'
+    if ($sk.Count) {
+        $kv["${prefix}skill~apd"] = "$($sk.Count)"
+        for ($j = 0; $j -lt $sk.Count; $j++) {
+            $kv["${prefix}skill[$j].skillid"] = "DWD:$($sk[$j])"; $kv["${prefix}skill[$j].skillbarindex"] = "DWD:$j"; $kv["${prefix}skill[$j].level"] = '#DWD:'
+        }
+    }
+    return $kv
+}
+# Backfill warriors saved before startgear existed (empty equipment): add their starting gear once.
+foreach ($k in @($save.Keys)) {
+    if ($k -match '^warriors\[(\d+)\]\.warriorid$' -and -not $save.Contains("warriors[$($Matches[1])].equipment~apd")) {
+        $i = $Matches[1]; $kv = GearKeys "warriors[$i]." $save[$k]
+        if ($kv.Contains("warriors[$i].equipment~apd")) { foreach ($e in $kv.GetEnumerator()) { $save[$e.Key] = $e.Value } }
+    }
+}
+
 function SaveState {
     $tmp = "$saveFile.tmp"
     $save | ConvertTo-Json | Set-Content $tmp -Encoding UTF8
@@ -403,16 +473,27 @@ function DsReply($peer, [byte[]]$p) {
         # recruit (callback WEGameMain 0x66a6f5a0): operationresult != 0, then the new warrior's fields + costs.
         $i = [int]$save['warriors~apd']; $id = $i + 1
         $w = [ordered]@{ instanceid = "DWD:$id"; warriorid = $req['warriorid']; nickname = $req['nickname']; level = $req['level']
-            experience = 'DWD:0'; flag = $req['flag']; totalskillpoint = 'DWD:0'; normalskillpoint = 'DWD:0'; specialskillpoint = 'DWD:0'
-            equipment = '#DWD:'; skill = '#STT:'; badge = '#STT:' }
+            experience = 'DWD:0'; flag = $req['flag']; totalskillpoint = 'DWD:0'; normalskillpoint = 'DWD:0'; specialskillpoint = 'DWD:0' }
+        foreach ($e in (GearKeys '' $req['warriorid']).GetEnumerator()) { $w[$e.Key] = $e.Value }
+        $w['badge'] = '#STT:'
         $out.Add('DEF|operationresult|DWD:1')
-        foreach ($k in $w.Keys) { $out.Add("DEF|$k|$($w[$k])"); $save["warriors[$i].$k"] = $w[$k] }
+        foreach ($k in $w.Keys) {
+            if ($k.EndsWith('~apd')) { $out.Add("APD|$($k -replace '~apd$')|$($w[$k])") } else { $out.Add("DEF|$k|$($w[$k])") }
+            $save["warriors[$i].$k"] = $w[$k]
+        }
         $out.Add('DEF|gamemoneycost|DWD:0'); $out.Add('DEF|realmoneycost|DWD:0'); $out.Add('DEF|shownotice|DWD:0')
         $save['warriors~apd'] = "$($i + 1)"
         Log "DS ADD_WARRIOR -> instance $id ($($req['nickname']))"
     } elseif ($op -eq 'SELECT_WARRIOR') {
         $save['curselwarriorid'] = $req['instanceid']; $out.Add('DEF|operationresult|DWD:1')
         Log "DS SELECT_WARRIOR -> curselwarriorid $($req['instanceid'])"
+    } elseif ($op -eq 'CHANGE_WARRIORNAME') {
+        # callback WEGameMain 0x66a6cb20: operationresult, then instanceid + warriorname echoed (applied by the client)
+        $out.Add('DEF|operationresult|DWD:1'); $out.Add("DEF|instanceid|$($req['instanceid'])"); $out.Add("DEF|warriorname|$($req['warriorname'])")
+        foreach ($k in @($save.Keys)) {
+            if ($k -match '^warriors\[(\d+)\]\.instanceid$' -and $save[$k] -eq $req['instanceid']) { $save["warriors[$($Matches[1])].nickname"] = $req['warriorname'] }
+        }
+        Log "DS CHANGE_WARRIORNAME -> $($req['instanceid']) = $($req['warriorname'])"
     } elseif ($op -eq 'SELECT_CAMPAIGN') {
         $save['curselcampaignname'] = $req['campaignname']; $out.Add('DEF|operationresult|DWD:1')
     } elseif ($op -eq 'CHANGE_CAMPAIGNRECORD') {
@@ -433,7 +514,10 @@ function DsReply($peer, [byte[]]$p) {
         foreach ($k in $keys) {
             $hit = $false
             foreach ($e in $save.GetEnumerator()) {
-                if ($e.Key -eq "$k~apd") { $out.Add("APD|$k|$($e.Value)"); $hit = $true }   # APD|array|n appends n elements
+                $name = $e.Key -replace '~apd$'
+                if ($e.Key.EndsWith('~apd') -and ($name -eq $k -or $name.StartsWith("$k[") -or $name.StartsWith("$k#"))) {
+                    $out.Add("APD|$name|$($e.Value)"); $hit = $true   # APD|array|n appends n elements (also nested: warriors[0].skill)
+                }
                 elseif ($e.Key -eq $k -or $e.Key.StartsWith("$k#") -or $e.Key.StartsWith("$k[")) { $out.Add("DEF|$($e.Key)|$($e.Value)"); $hit = $true }   # DEF = typed value (RED is a reference)
             }
             if (-not $hit) { Log "DS no data for key '$k'" }
@@ -543,7 +627,7 @@ $udp = foreach ($p in 8899, 9999, 8892) {
     [void]$uc.Client.IOControl(-1744830452, [byte[]](0, 0, 0, 0), $null)   # SIO_UDP_CONNRESET off: ignore ICMP port-unreachable
     [pscustomobject]@{ P = $p; U = $uc }
 }
-Log "stub v47 up: TCP 7788 8088 8888 23 + HTTP 8080, UDP 8899 9999 8892 (log: $log)"
+Log "stub v56 up: TCP 7788 8088 8888 23 + HTTP 8080, UDP 8899 9999 8892 (log: $log)"
 
 $conns = New-Object System.Collections.ArrayList
 while ($true) {
