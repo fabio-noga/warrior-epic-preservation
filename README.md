@@ -1,4 +1,4 @@
-# warrior-epic-recomp
+# warrior-epic-preservation
 
 An effort to make the old MMO **Warrior Epic** (Possibility Space, servers shut down around 2010) playable again
 offline, by emulating the servers it talks to. The original client stays almost untouched: it's redirected to
